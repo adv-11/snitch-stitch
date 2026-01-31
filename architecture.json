@@ -1,0 +1,459 @@
+[
+  {
+    "reason": "Package configuration defines project metadata, dependencies, and CLI entry point",
+    "description": "Modern Python package configuration using pyproject.toml with PEP 517/518/621 compliance. Defines snitch-stitch package metadata, dependencies (click, openai, requests, gitingest), Python version requirement (>=3.9), and CLI entry point. Uses setuptools as build backend.",
+    "dependencies": [],
+    "priority": 1,
+    "filename": "pyproject_Python.prompt",
+    "filepath": "pyproject.toml",
+    "tags": [
+      "config",
+      "packaging"
+    ],
+    "context_urls": [
+      {
+        "url": "https://packaging.python.org/en/latest/guides/writing-pyproject-toml/",
+        "purpose": "pyproject_toml_guide"
+      },
+      {
+        "url": "https://setuptools.pypa.io/en/latest/userguide/pyproject_config.html",
+        "purpose": "setuptools_config"
+      },
+      {
+        "url": "https://peps.python.org/pep-0621/",
+        "purpose": "pep621_spec"
+      }
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": [
+          {
+            "name": "name",
+            "type": "string",
+            "default": "snitch-stitch",
+            "required": true,
+            "source": "file"
+          },
+          {
+            "name": "version",
+            "type": "string",
+            "default": "0.1.0",
+            "required": true,
+            "source": "file"
+          },
+          {
+            "name": "requires-python",
+            "type": "string",
+            "default": ">=3.9",
+            "required": true,
+            "source": "file"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Package initialization file makes snitch_stitch a valid Python package",
+    "description": "Standard Python __init__.py file for the snitch_stitch package. Exports package version and main components for import. Minimal implementation with version metadata.",
+    "dependencies": [],
+    "priority": 2,
+    "filename": "init_Python.prompt",
+    "filepath": "src/snitch_stitch/__init__.py",
+    "tags": [
+      "package",
+      "init"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "__version__",
+            "signature": "__version__: str",
+            "returns": "Package version string"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Repository ingestion converts local Git repos into LLM-friendly text format",
+    "description": "Uses gitingest library to convert a local repository into a single text blob. Returns tuple of (summary, tree, content) where content contains all file contents with delimiters. Handles large repos with truncation warnings. Fatal error if gitingest fails.",
+    "dependencies": [],
+    "priority": 3,
+    "filename": "ingest_Python.prompt",
+    "filepath": "src/snitch_stitch/ingest.py",
+    "tags": [
+      "ingest",
+      "core"
+    ],
+    "context_urls": [
+      {
+        "url": "https://github.com/cyclotruc/gitingest",
+        "purpose": "gitingest_docs"
+      },
+      {
+        "url": "https://pypi.org/project/gitingest/",
+        "purpose": "gitingest_pypi"
+      }
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "ingest_repository",
+            "signature": "def ingest_repository(repo_path: str, verbose: bool = False) -> tuple[dict, str, str]",
+            "returns": "Tuple of (summary dict, tree string, content blob)",
+            "errors": [
+              "SystemExit if gitingest fails"
+            ],
+            "sideEffects": [
+              "Reads all files in the repository directory"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Backend scanner analyzes source code for security vulnerabilities using OpenAI",
+    "description": "Sends ingested repository content to OpenAI GPT-4o with security analysis prompt. Returns structured list of vulnerabilities with id, title, class, file, line_range, description, source, and sink. Uses JSON mode for reliable parsing. Gracefully degrades to empty list on API failure.",
+    "dependencies": [],
+    "priority": 4,
+    "filename": "backend_scanner_Python.prompt",
+    "filepath": "src/snitch_stitch/backend_scanner.py",
+    "tags": [
+      "scanner",
+      "backend",
+      "security"
+    ],
+    "context_urls": [
+      {
+        "url": "https://platform.openai.com/docs/api-reference/chat",
+        "purpose": "openai_chat_api"
+      },
+      {
+        "url": "https://platform.openai.com/docs/guides/structured-outputs",
+        "purpose": "openai_json_mode"
+      },
+      {
+        "url": "https://platform.openai.com/docs/api-reference/chat/create",
+        "purpose": "chat_completions"
+      },
+      {
+        "url": "https://platform.openai.com/docs/guides/error-codes",
+        "purpose": "error_handling"
+      },
+      {
+        "url": "https://cookbook.openai.com/examples/how_to_handle_rate_limits",
+        "purpose": "rate_limits"
+      }
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "scan_backend",
+            "signature": "def scan_backend(content: str, verbose: bool = False) -> list[dict]",
+            "returns": "List of vulnerability finding dicts",
+            "errors": [
+              "Returns empty list on API failure or JSON parse error"
+            ],
+            "sideEffects": [
+              "Calls OpenAI API",
+              "Prints warnings on failures if verbose"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Frontend scanner performs dynamic browser-based security testing via rtrvr.ai",
+    "description": "Optional scanner that uses rtrvr.ai MCP endpoint to control a browser and probe running frontend for XSS, auth bypass, IDOR, and input validation issues. Only runs if RTRVR_API_KEY is set and --frontend-url is provided. Returns findings list matching backend scanner format.",
+    "dependencies": [],
+    "priority": 5,
+    "filename": "frontend_scanner_Python.prompt",
+    "filepath": "src/snitch_stitch/frontend_scanner.py",
+    "tags": [
+      "scanner",
+      "frontend",
+      "security"
+    ],
+    "context_urls": [
+      {
+        "url": "https://docs.python-requests.org/en/latest/user/quickstart/",
+        "purpose": "requests_quickstart"
+      },
+      {
+        "url": "https://docs.python-requests.org/en/latest/user/advanced/#json-post",
+        "purpose": "requests_json"
+      },
+      {
+        "url": "https://docs.python.org/3/library/os.html#os.environ",
+        "purpose": "os_environ"
+      },
+      {
+        "url": "https://docs.python.org/3/library/os.html#os.getenv",
+        "purpose": "os_getenv"
+      }
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "scan_frontend",
+            "signature": "def scan_frontend(frontend_url: str | None, verbose: bool = False) -> list[dict]",
+            "returns": "List of vulnerability finding dicts, empty if skipped",
+            "errors": [
+              "Returns empty list on API failure or missing credentials"
+            ],
+            "sideEffects": [
+              "Calls rtrvr.ai API",
+              "Prints notices/warnings",
+              "Checks RTRVR_API_KEY env var"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Ranker scores, deduplicates, and sorts vulnerability findings",
+    "description": "Takes combined findings from backend and frontend scanners. Assigns threat scores (0-10) based on exposure (public_facing=5, local_only=1), exploitability (easy=3, moderate=2, hard=1), and impact (critical=4, high=3, medium=2, low=1). Assigns severity labels (Critical/High/Medium/Low). Returns sorted list by score descending.",
+    "dependencies": [
+      "backend_scanner_Python.prompt",
+      "frontend_scanner_Python.prompt"
+    ],
+    "priority": 6,
+    "filename": "ranker_Python.prompt",
+    "filepath": "src/snitch_stitch/ranker.py",
+    "tags": [
+      "ranking",
+      "scoring"
+    ],
+    "context_urls": [
+      {
+        "url": "https://docs.python.org/3/howto/sorting.html",
+        "purpose": "python_sorting"
+      },
+      {
+        "url": "https://docs.python.org/3/library/functions.html#min",
+        "purpose": "builtin_min"
+      }
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "rank_findings",
+            "signature": "def rank_findings(backend_findings: list[dict], frontend_findings: list[dict]) -> list[dict]",
+            "returns": "Sorted list of findings with score/severity fields added",
+            "errors": [],
+            "sideEffects": [
+              "None - pure function"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Fixer generates minimal security patches using OpenAI",
+    "description": "For each selected vulnerability, extracts the relevant file content from gitingest output, sends to OpenAI with fix generation prompt. Returns original_lines and fixed_lines for exact string replacement. Uses JSON mode for reliable parsing. Handles file extraction by parsing gitingest delimiters.",
+    "dependencies": [
+      "ingest_Python.prompt"
+    ],
+    "priority": 7,
+    "filename": "fixer_Python.prompt",
+    "filepath": "src/snitch_stitch/fixer.py",
+    "tags": [
+      "fixer",
+      "patches"
+    ],
+    "context_urls": [
+      {
+        "url": "https://platform.openai.com/docs/api-reference/chat/create",
+        "purpose": "openai_chat_api"
+      },
+      {
+        "url": "https://platform.openai.com/docs/guides/structured-outputs",
+        "purpose": "structured_outputs"
+      },
+      {
+        "url": "https://docs.python.org/3/library/stdtypes.html#str.replace",
+        "purpose": "string_replace"
+      },
+      {
+        "url": "https://docs.python.org/3/library/stdtypes.html#str.split",
+        "purpose": "string_split"
+      }
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "generate_fixes",
+            "signature": "def generate_fixes(findings: list[dict], repo_content: str, verbose: bool = False) -> list[dict]",
+            "returns": "List of fix dicts with original_lines, fixed_lines, finding metadata",
+            "errors": [
+              "Returns partial list if individual fixes fail"
+            ],
+            "sideEffects": [
+              "Calls OpenAI API",
+              "Prints warnings on failures"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Diff display renders colored diffs and applies user-approved fixes to disk",
+    "description": "Generates unified diffs using difflib. Renders with ANSI color codes (red for deletions, green for additions). Prompts user for approval (y/n). Writes fixes to disk if approved. Handles exact string matching failures gracefully. Respects --dry-run flag.",
+    "dependencies": [],
+    "priority": 8,
+    "filename": "diff_display_Python.prompt",
+    "filepath": "src/snitch_stitch/diff_display.py",
+    "tags": [
+      "diff",
+      "ui",
+      "apply"
+    ],
+    "context_urls": [
+      {
+        "url": "https://docs.python.org/3/library/difflib.html#difflib.unified_diff",
+        "purpose": "unified_diff"
+      },
+      {
+        "url": "https://docs.python.org/3/library/difflib.html",
+        "purpose": "difflib_module"
+      },
+      {
+        "url": "https://gist.github.com/fnky/458719343aabd01cfb17a3a4f7296797",
+        "purpose": "ansi_codes"
+      },
+      {
+        "url": "https://stackoverflow.com/questions/287871/how-do-i-print-colored-text-to-the-terminal",
+        "purpose": "terminal_colors"
+      }
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "display_and_apply_fixes",
+            "signature": "def display_and_apply_fixes(fixes: list[dict], repo_path: str, dry_run: bool = False) -> None",
+            "returns": "None",
+            "errors": [
+              "Prints warnings for file not found or match failures"
+            ],
+            "sideEffects": [
+              "Reads files from disk",
+              "Writes modified files to disk (unless dry_run)",
+              "Prompts user for input",
+              "Prints colored diff output"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "CLI orchestrates the 5-stage security audit pipeline",
+    "description": "Click-based CLI entry point. Orchestrates: Stage 1 (ingest), Stage 2 (backend scan), Stage 3 (frontend scan if enabled), Stage 4 (ranking), Stage 5 (fix generation and application). Validates OPENAI_API_KEY is set. Handles all command-line flags (repo_path, --frontend-url, --fix-all, --dry-run, --verbose). Prints stage progress with checkmarks and summary table.",
+    "dependencies": [
+      "ingest_Python.prompt",
+      "backend_scanner_Python.prompt",
+      "frontend_scanner_Python.prompt",
+      "ranker_Python.prompt",
+      "fixer_Python.prompt",
+      "diff_display_Python.prompt"
+    ],
+    "priority": 9,
+    "filename": "cli_Python.prompt",
+    "filepath": "src/snitch_stitch/cli.py",
+    "tags": [
+      "cli",
+      "orchestrator"
+    ],
+    "context_urls": [
+      {
+        "url": "https://click.palletsprojects.com/en/8.1.x/",
+        "purpose": "click_docs"
+      },
+      {
+        "url": "https://click.palletsprojects.com/en/8.1.x/quickstart/",
+        "purpose": "click_quickstart"
+      },
+      {
+        "url": "https://click.palletsprojects.com/en/8.1.x/options/",
+        "purpose": "click_options"
+      },
+      {
+        "url": "https://docs.python.org/3/library/os.html#os.getenv",
+        "purpose": "env_vars"
+      }
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "snitch-stitch",
+            "args": [
+              {
+                "name": "repo_path",
+                "type": "path",
+                "required": true
+              }
+            ],
+            "flags": [
+              {
+                "name": "--frontend-url",
+                "type": "string",
+                "default": "None"
+              },
+              {
+                "name": "--fix-all",
+                "type": "boolean",
+                "default": false
+              },
+              {
+                "name": "--dry-run",
+                "type": "boolean",
+                "default": false
+              },
+              {
+                "name": "--verbose",
+                "type": "boolean",
+                "default": false
+              }
+            ],
+            "exitCodes": [
+              {
+                "code": 0,
+                "description": "Success"
+              },
+              {
+                "code": 1,
+                "description": "Error: OPENAI_API_KEY not set or gitingest failure"
+              }
+            ]
+          }
+        ],
+        "io": {
+          "stdin": "User selections for vulnerability numbers",
+          "stdout": "Stage progress, vulnerability table, diff display, prompts"
+        }
+      }
+    }
+  }
+]
