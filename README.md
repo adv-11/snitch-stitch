@@ -1,6 +1,12 @@
-# snitch-stitch
+# 🕸️snitch-stitch
 
 A security auditor CLI for Git repositories. Scans both backend source code and running frontend UIs to find real security vulnerabilities, scores them by severity, and lets you accept or reject LLM-generated code fixes.
+
+---
+
+[![PyPI version](https://img.shields.io/pypi/v/snitch-stitch.svg)](https://pypi.org/project/snitch-stitch)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Installation
 
