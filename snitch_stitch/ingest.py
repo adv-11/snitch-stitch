@@ -73,10 +73,10 @@ def extract_file_content(full_content: str, file_path: str) -> Optional[str]:
     """Extract a single file's content from the gitingest output.
 
     The gitingest output contains all files concatenated with delimiters like:
-    --- File: path/to/file.py ---
+    ================================================
+    FILE: path/to/file.py
+    ================================================
     <file content>
-    --- File: another/file.py ---
-    ...
 
     Args:
         full_content: The full content blob from gitingest.
@@ -85,54 +85,67 @@ def extract_file_content(full_content: str, file_path: str) -> Optional[str]:
     Returns:
         The file content if found, None otherwise.
     """
-    # Common delimiter patterns used by gitingest
-    delimiters = [
+    # Gitingest uses this format:
+    # ================================================
+    # FILE: path/to/file.py
+    # ================================================
+    file_marker = f"FILE: {file_path}"
+    
+    if file_marker in full_content:
+        # Find the start of this file's marker
+        marker_idx = full_content.find(file_marker)
+        if marker_idx == -1:
+            return None
+        
+        # Move past the FILE: line and the following === line
+        content_start = full_content.find("\n", marker_idx)
+        if content_start == -1:
+            return None
+        content_start += 1
+        
+        # Skip the closing === delimiter line
+        if full_content[content_start:].startswith("="):
+            content_start = full_content.find("\n", content_start)
+            if content_start == -1:
+                return None
+            content_start += 1
+        
+        # Find the next file delimiter (starts with ===...followed by FILE:)
+        next_file_idx = full_content.find("\n================================================\nFILE:", content_start)
+        if next_file_idx == -1:
+            # No more files, take until end
+            return full_content[content_start:].strip()
+        else:
+            return full_content[content_start:next_file_idx].strip()
+    
+    # Try alternative delimiters for backwards compatibility
+    alt_delimiters = [
         f"--- File: {file_path} ---",
         f"--- {file_path} ---",
         f"File: {file_path}",
-        f"# {file_path}",
     ]
-
-    for delimiter in delimiters:
+    
+    for delimiter in alt_delimiters:
         if delimiter in full_content:
-            # Find the start of this file's content
             start_idx = full_content.find(delimiter)
             if start_idx == -1:
                 continue
-
-            # Move past the delimiter line
+            
             content_start = full_content.find("\n", start_idx)
             if content_start == -1:
                 continue
             content_start += 1
-
-            # Find the next file delimiter or end of content
-            next_file_patterns = ["--- File:", "---\n", "\n# "]
+            
+            # Find next delimiter
+            next_file_patterns = ["--- File:", "---\n", "\n================================================\n"]
             end_idx = len(full_content)
-
+            
             for pattern in next_file_patterns:
                 next_idx = full_content.find(pattern, content_start)
                 if next_idx != -1 and next_idx < end_idx:
-                    # Make sure we're not finding the same delimiter
                     if next_idx > content_start:
                         end_idx = next_idx
-
+            
             return full_content[content_start:end_idx].strip()
-
-    # Try a more flexible approach - look for the file path anywhere
-    # and extract surrounding content
-    if file_path in full_content:
-        # Find line containing the file path
-        lines = full_content.split("\n")
-        for i, line in enumerate(lines):
-            if file_path in line and ("---" in line or "File:" in line or line.startswith("#")):
-                # Found a header line, extract content until next header
-                content_lines = []
-                for j in range(i + 1, len(lines)):
-                    if lines[j].startswith("---") or lines[j].startswith("# ") and "/" in lines[j]:
-                        break
-                    content_lines.append(lines[j])
-                if content_lines:
-                    return "\n".join(content_lines).strip()
-
+    
     return None

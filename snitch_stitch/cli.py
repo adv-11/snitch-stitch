@@ -9,7 +9,7 @@ from .ingest import ingest_repo
 from .backend_scanner import scan_backend
 from .frontend_scanner import scan_frontend
 from .ranker import rank_findings
-from .fixer import generate_fix
+from .fixer import generate_fix, check_more_changes_needed
 from .diff_display import display_and_apply_diff
 
 
@@ -179,23 +179,6 @@ def main(repo_path: str, frontend_url: str, fix_all: bool, dry_run: bool, verbos
     for finding in selected:
         click.echo(f"\n--- Generating fix for: {finding.get('title', 'Unknown')} ---")
 
-        fix = generate_fix(finding, content, openai_api_key, verbose=verbose)
-
-        if fix is None:
-            click.echo("Could not generate a fix for this vulnerability.")
-            continue
-
-        if fix.get("note"):
-            click.echo(f"Note: {fix['note']}")
-            continue
-
-        original_lines = fix.get("original_lines", "")
-        fixed_lines = fix.get("fixed_lines", "")
-
-        if not original_lines:
-            click.echo("No code changes needed for this vulnerability.")
-            continue
-
         file_path = finding.get("file", "")
         if not file_path:
             click.echo("Error: No file path in finding. Skipping.")
@@ -203,14 +186,85 @@ def main(repo_path: str, frontend_url: str, fix_all: bool, dry_run: bool, verbos
 
         full_file_path = os.path.join(repo_path, file_path)
 
-        display_and_apply_diff(
-            file_path=full_file_path,
-            original_lines=original_lines,
-            fixed_lines=fixed_lines,
-            finding_title=finding.get("title", "Unknown"),
-            finding_severity=finding.get("severity", "Unknown"),
-            dry_run=dry_run,
-        )
+        # Track state for multi-change fixes
+        current_file_content = None
+        change_count = 0
+        user_declined = False
+        max_changes_per_vuln = 10  # Safety limit to prevent infinite loops
+
+        while change_count < max_changes_per_vuln:
+            # Generate fix - use file content override if we've already made changes
+            fix = generate_fix(
+                finding,
+                content,
+                openai_api_key,
+                verbose=verbose,
+                file_content_override=current_file_content,
+            )
+
+            if fix is None:
+                if change_count == 0:
+                    click.echo("Could not generate a fix for this vulnerability.")
+                break
+
+            if fix.get("note"):
+                click.echo(f"Note: {fix['note']}")
+                break
+
+            original_lines = fix.get("original_lines", "")
+            fixed_lines = fix.get("fixed_lines", "")
+
+            if not original_lines:
+                if change_count == 0:
+                    click.echo("No code changes needed for this vulnerability.")
+                break
+
+            # Don't show "Fixed" message yet - wait until all changes are done
+            fix_applied = display_and_apply_diff(
+                file_path=full_file_path,
+                original_lines=original_lines,
+                fixed_lines=fixed_lines,
+                finding_title=finding.get("title", "Unknown"),
+                finding_severity=finding.get("severity", "Unknown"),
+                dry_run=dry_run,
+                show_fixed_message=False,
+            )
+
+            if not fix_applied:
+                # User declined or fix couldn't be applied
+                user_declined = True
+                break
+
+            change_count += 1
+
+            # Re-read the file to get updated content
+            try:
+                with open(full_file_path, "r", encoding="utf-8") as f:
+                    current_file_content = f.read()
+            except Exception as e:
+                if verbose:
+                    click.echo(f"      [DEBUG] Could not re-read file: {e}")
+                break
+
+            # Ask the model if more changes are needed for THIS vulnerability
+            needs_more, reason = check_more_changes_needed(
+                finding, current_file_content, openai_api_key, verbose=verbose
+            )
+
+            if verbose:
+                click.echo(f"      [DEBUG] More changes needed: {needs_more} - {reason}")
+
+            if not needs_more:
+                break
+
+            # Model says more changes needed - continue the loop
+            click.echo(f"      Additional changes needed: {reason}")
+
+        # Show "Fixed" message only after all changes are complete (and user didn't decline)
+        if change_count > 0 and not user_declined:
+            if change_count >= max_changes_per_vuln:
+                click.echo(f"      Warning: Reached maximum changes limit ({max_changes_per_vuln}) for this vulnerability.")
+            click.echo(f"\033[92m\u2713 Fixed: {file_path}\033[0m")
 
     click.echo("\nDone!")
 

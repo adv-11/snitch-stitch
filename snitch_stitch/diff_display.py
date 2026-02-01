@@ -82,6 +82,7 @@ def display_and_apply_diff(
     finding_title: str,
     finding_severity: str,
     dry_run: bool = False,
+    show_fixed_message: bool = True,
 ) -> bool:
     """Display a colored diff and optionally apply the fix.
 
@@ -92,6 +93,8 @@ def display_and_apply_diff(
         finding_title: Title of the vulnerability being fixed.
         finding_severity: Severity level of the vulnerability.
         dry_run: If True, show diff but don't write to disk.
+        show_fixed_message: If True, show "Fixed" message after applying. Set to False
+            when more changes may follow for the same vulnerability.
 
     Returns:
         True if the fix was applied, False otherwise.
@@ -153,7 +156,8 @@ def display_and_apply_diff(
         try:
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
-            click.echo(f"{GREEN}\u2713 Fixed: {relative_path}{RESET}")
+            if show_fixed_message:
+                click.echo(f"{GREEN}\u2713 Fixed: {relative_path}{RESET}")
             return True
         except Exception as e:
             click.echo(f"{RED}Error writing file {file_path}: {e}{RESET}")

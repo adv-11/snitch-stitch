@@ -47,12 +47,11 @@ def scan_backend(repo_content: str, api_key: str, verbose: bool = False) -> List
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5-mini",
             messages=[
                 {"role": "system", "content": SECURITY_ANALYSIS_PROMPT},
                 {"role": "user", "content": repo_content},
             ],
-            temperature=0.1,  # Low temperature for consistent analysis
         )
 
         result_text = response.choices[0].message.content
