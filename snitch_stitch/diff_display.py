@@ -2,7 +2,7 @@
 
 import difflib
 import os
-from typing import List
+from typing import List, Tuple
 
 import click
 
@@ -57,8 +57,8 @@ def colorize_diff(diff_lines: List[str]) -> str:
         line = line.rstrip("\n")
 
         if line.startswith("---") or line.startswith("+++"):
-            # File headers - bold
-            colored_lines.append(f"{BOLD}{line}{RESET}")
+            # Skip file headers - file name is already shown above the diff
+            continue
         elif line.startswith("@@"):
             # Hunk headers - dim
             colored_lines.append(f"{DIM}{line}{RESET}")
@@ -83,7 +83,8 @@ def display_and_apply_diff(
     finding_severity: str,
     dry_run: bool = False,
     show_fixed_message: bool = True,
-) -> bool:
+    auto_accept: bool = False,
+) -> Tuple[bool, bool]:
     """Display a colored diff and optionally apply the fix.
 
     Args:
@@ -95,14 +96,16 @@ def display_and_apply_diff(
         dry_run: If True, show diff but don't write to disk.
         show_fixed_message: If True, show "Fixed" message after applying. Set to False
             when more changes may follow for the same vulnerability.
+        auto_accept: If True, automatically accept this fix without prompting.
 
     Returns:
-        True if the fix was applied, False otherwise.
+        A tuple of (fix_applied: bool, auto_accept: bool). The second value is True
+        if the user chose to auto-accept all future fixes.
     """
     # Check if file exists
     if not os.path.isfile(file_path):
         click.echo(f"Warning: File not found: {file_path}. Skipping this fix.")
-        return False
+        return (False, auto_accept)
 
     # Read the current file content
     try:
@@ -110,12 +113,12 @@ def display_and_apply_diff(
             current_content = f.read()
     except Exception as e:
         click.echo(f"Error reading file {file_path}: {e}")
-        return False
+        return (False, auto_accept)
 
     # Check if original_lines exists in the file
     if original_lines not in current_content:
         click.echo(f"Could not locate the code block in {file_path}. Skipping this fix.")
-        return False
+        return (False, auto_accept)
 
     # Generate the new content
     new_content = current_content.replace(original_lines, fixed_lines, 1)
@@ -133,7 +136,7 @@ def display_and_apply_diff(
 
     if not diff_lines:
         click.echo("No changes detected.")
-        return False
+        return (False, auto_accept)
 
     # Print header
     click.echo(f"\n {BOLD}{relative_path}{RESET}")
@@ -147,21 +150,26 @@ def display_and_apply_diff(
 
     if dry_run:
         click.echo(f"{DIM}[dry-run] Would apply fix to {relative_path}{RESET}")
-        return False
+        return (False, auto_accept)
 
-    # Prompt user for confirmation
-    response = click.prompt("Apply this fix? [y/n]", type=str, default="n")
+    # Auto-accept or prompt user for confirmation
+    if auto_accept:
+        response = "y"
+    else:
+        response = click.prompt("Apply this fix? [y/n/a=accept all]", type=str, default="n", show_default=False)
 
-    if response.lower() in ("y", "yes"):
+    if response.lower() in ("y", "yes", "a", "all"):
         try:
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
             if show_fixed_message:
                 click.echo(f"{GREEN}\u2713 Fixed: {relative_path}{RESET}")
-            return True
+            # If user chose 'a', enable auto_accept for future fixes
+            new_auto_accept = auto_accept or response.lower() in ("a", "all")
+            return (True, new_auto_accept)
         except Exception as e:
             click.echo(f"{RED}Error writing file {file_path}: {e}{RESET}")
-            return False
+            return (False, auto_accept)
     else:
         click.echo("Skipped.")
-        return False
+        return (False, auto_accept)

@@ -70,12 +70,9 @@ def scan_frontend(frontend_url: str, api_key: str, verbose: bool = False) -> Lis
             timeout=300,  # 5 minute timeout for browser automation
         )
 
-        if verbose:
-            click.echo(f"      [DEBUG] rtrvr.ai response status: {response.status_code}")
-
         if response.status_code != 200:
-            click.echo(f"      Warning: rtrvr.ai returned status {response.status_code}")
             if verbose:
+                click.echo(f"      Warning: rtrvr.ai returned status {response.status_code}")
                 click.echo(f"      [DEBUG] Response: {response.text[:500]}")
             return []
 
@@ -96,18 +93,19 @@ def scan_frontend(frontend_url: str, api_key: str, verbose: bool = False) -> Lis
         return findings
 
     except requests.exceptions.Timeout:
-        click.echo("      Warning: rtrvr.ai request timed out.")
+        if verbose:
+            click.echo("      Warning: rtrvr.ai request timed out.")
         return []
     except requests.exceptions.RequestException as e:
-        click.echo(f"      Warning: Frontend scan failed: {e}")
         if verbose:
             import traceback
+            click.echo(f"      Warning: Frontend scan failed: {e}")
             click.echo(f"      [DEBUG] Traceback:\n{traceback.format_exc()}")
         return []
     except Exception as e:
-        click.echo(f"      Warning: Frontend scan error: {e}")
         if verbose:
             import traceback
+            click.echo(f"      Warning: Frontend scan error: {e}")
             click.echo(f"      [DEBUG] Traceback:\n{traceback.format_exc()}")
         return []
 

@@ -9,7 +9,7 @@ from .ingest import ingest_repo
 from .backend_scanner import scan_backend
 from .frontend_scanner import scan_frontend
 from .ranker import rank_findings
-from .fixer import generate_fix, check_more_changes_needed
+from .fixer import generate_fix, evaluate_and_fix_remaining
 from .diff_display import display_and_apply_diff
 
 
@@ -80,7 +80,7 @@ def get_user_selection(findings: list, fix_all: bool) -> list:
 
 
 @click.command()
-@click.argument("repo_path", type=click.Path(exists=True, file_okay=False, dir_okay=True))
+@click.argument("repo_path", type=click.Path(exists=True, file_okay=False, dir_okay=True), default=".", required=False)
 @click.option(
     "--frontend-url",
     type=str,
@@ -108,15 +108,16 @@ def get_user_selection(findings: list, fix_all: bool) -> list:
 def main(repo_path: str, frontend_url: str, fix_all: bool, dry_run: bool, verbose: bool) -> None:
     """Scan a Git repository for security vulnerabilities and generate fixes.
 
-    REPO_PATH is the path to the local repository directory to scan.
+    REPO_PATH is the path to the local repository directory to scan (defaults to
+    current directory).
 
     This tool modifies real files when fixes are accepted. Use --dry-run to preview
     without making changes.
     """
     # Check required environment variables
-    openai_api_key = os.environ.get("OPENAI_API_KEY")
-    if not openai_api_key:
-        click.echo("Error: OPENAI_API_KEY environment variable is not set. Please set it and try again.")
+    anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not anthropic_api_key:
+        click.echo("Error: ANTHROPIC_API_KEY environment variable is not set. Please set it and try again.")
         sys.exit(1)
 
     rtrvr_api_key = os.environ.get("RTRVR_API_KEY")
@@ -128,9 +129,13 @@ def main(repo_path: str, frontend_url: str, fix_all: bool, dry_run: bool, verbos
     print_stage(1, "Ingesting repository...")
     try:
         summary, tree, content = ingest_repo(repo_path)
-        file_count = summary.get("file_count", "?")
-        total_size = summary.get("total_size", "?")
-        print_success(f"Ingested {file_count} files ({total_size})")
+        file_count = summary.get("file_count")
+        total_size = summary.get("total_size")
+        # Only show details if we have them
+        if file_count and file_count != "unknown" and total_size and total_size != "unknown":
+            print_success(f"Ingested {file_count} files ({total_size})")
+        else:
+            print_success("Repository ingested")
         if verbose:
             click.echo(f"\n      Tree:\n{tree}")
     except Exception as e:
@@ -139,7 +144,7 @@ def main(repo_path: str, frontend_url: str, fix_all: bool, dry_run: bool, verbos
 
     # Stage 2: Backend scan
     print_stage(2, "Scanning backend code...")
-    backend_findings = scan_backend(content, openai_api_key, verbose=verbose)
+    backend_findings = scan_backend(content, anthropic_api_key, verbose=verbose, show_thinking=True)
     print_success(f"Found {len(backend_findings)} backend vulnerabilities")
 
     # Stage 3: Frontend scan (optional)
@@ -176,6 +181,8 @@ def main(repo_path: str, frontend_url: str, fix_all: bool, dry_run: bool, verbos
         return
 
     # Generate and apply fixes
+    auto_accept = False  # Track if user chose to auto-accept all fixes
+
     for finding in selected:
         click.echo(f"\n--- Generating fix for: {finding.get('title', 'Unknown')} ---")
 
@@ -192,16 +199,17 @@ def main(repo_path: str, frontend_url: str, fix_all: bool, dry_run: bool, verbos
         user_declined = False
         max_changes_per_vuln = 10  # Safety limit to prevent infinite loops
 
-        while change_count < max_changes_per_vuln:
-            # Generate fix - use file content override if we've already made changes
-            fix = generate_fix(
-                finding,
-                content,
-                openai_api_key,
-                verbose=verbose,
-                file_content_override=current_file_content,
-            )
+        # Generate the first fix
+        fix = generate_fix(
+            finding,
+            content,
+            anthropic_api_key,
+            verbose=verbose,
+            file_content_override=current_file_content,
+            show_thinking=True,
+        )
 
+        while change_count < max_changes_per_vuln:
             if fix is None:
                 if change_count == 0:
                     click.echo("Could not generate a fix for this vulnerability.")
@@ -220,7 +228,7 @@ def main(repo_path: str, frontend_url: str, fix_all: bool, dry_run: bool, verbos
                 break
 
             # Don't show "Fixed" message yet - wait until all changes are done
-            fix_applied = display_and_apply_diff(
+            fix_applied, auto_accept = display_and_apply_diff(
                 file_path=full_file_path,
                 original_lines=original_lines,
                 fixed_lines=fixed_lines,
@@ -228,6 +236,7 @@ def main(repo_path: str, frontend_url: str, fix_all: bool, dry_run: bool, verbos
                 finding_severity=finding.get("severity", "Unknown"),
                 dry_run=dry_run,
                 show_fixed_message=False,
+                auto_accept=auto_accept,
             )
 
             if not fix_applied:
@@ -246,19 +255,10 @@ def main(repo_path: str, frontend_url: str, fix_all: bool, dry_run: bool, verbos
                     click.echo(f"      [DEBUG] Could not re-read file: {e}")
                 break
 
-            # Ask the model if more changes are needed for THIS vulnerability
-            needs_more, reason = check_more_changes_needed(
-                finding, current_file_content, openai_api_key, verbose=verbose
+            # Evaluate if more changes needed and get the next fix in one call
+            fix = evaluate_and_fix_remaining(
+                finding, current_file_content, anthropic_api_key, verbose=verbose, show_thinking=True
             )
-
-            if verbose:
-                click.echo(f"      [DEBUG] More changes needed: {needs_more} - {reason}")
-
-            if not needs_more:
-                break
-
-            # Model says more changes needed - continue the loop
-            click.echo(f"      Additional changes needed: {reason}")
 
         # Show "Fixed" message only after all changes are complete (and user didn't decline)
         if change_count > 0 and not user_declined:

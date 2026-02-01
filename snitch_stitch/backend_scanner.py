@@ -1,10 +1,12 @@
-"""Backend code security scanner using OpenAI."""
+"""Backend code security scanner using Claude Sonnet 4.5 with extended thinking."""
 
 import json
 from typing import Dict, List
 
+import anthropic
 import click
-from openai import OpenAI
+
+from .fixer import ThinkingDisplay
 
 SECURITY_ANALYSIS_PROMPT = """You are a security auditor. You are given the full source code of a software repository.
 
@@ -31,30 +33,60 @@ Rules:
 - Be specific. Point to the exact file and approximate line."""
 
 
-def scan_backend(repo_content: str, api_key: str, verbose: bool = False) -> List[Dict]:
-    """Scan repository code for security vulnerabilities using OpenAI.
+def scan_backend(
+    repo_content: str, api_key: str, verbose: bool = False, show_thinking: bool = True
+) -> List[Dict]:
+    """Scan repository code for security vulnerabilities using Claude Sonnet 4.5.
 
     Args:
         repo_content: The full text content of the repository from gitingest.
-        api_key: OpenAI API key.
+        api_key: Anthropic API key.
         verbose: If True, print debug information.
+        show_thinking: If True, display Claude's thinking process in the CLI.
 
     Returns:
         A list of vulnerability findings, each as a dict with keys:
         id, title, class, file, line_range, description, source, sink
     """
-    client = OpenAI(api_key=api_key)
+    if not repo_content or len(repo_content) < 10:
+        return []
+
+    client = anthropic.Anthropic(api_key=api_key)
 
     try:
-        response = client.chat.completions.create(
-            model="gpt-5-mini",
-            messages=[
-                {"role": "system", "content": SECURITY_ANALYSIS_PROMPT},
-                {"role": "user", "content": repo_content},
-            ],
-        )
+        thinking_text = ""
+        result_text = ""
+        display = ThinkingDisplay("Scanning...", "33") if show_thinking else None  # Yellow color
 
-        result_text = response.choices[0].message.content
+        # Use streaming to show thinking in real-time
+        with client.messages.stream(
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=16000,
+            thinking={
+                "type": "enabled",
+                "budget_tokens": 5000,
+            },
+            messages=[
+                {"role": "user", "content": f"{SECURITY_ANALYSIS_PROMPT}\n\n{repo_content}"},
+            ],
+        ) as stream:
+            for event in stream:
+                if hasattr(event, "type"):
+                    if event.type == "content_block_start":
+                        if hasattr(event, "content_block") and event.content_block.type == "thinking":
+                            if display:
+                                display.start()
+                    elif event.type == "content_block_delta":
+                        if hasattr(event, "delta"):
+                            if event.delta.type == "thinking_delta":
+                                thinking_text += event.delta.thinking
+                                if display:
+                                    display.update(thinking_text)
+                            elif event.delta.type == "text_delta":
+                                result_text += event.delta.text
+
+        if display:
+            display.finish()
 
         if verbose:
             click.echo(f"\n      [DEBUG] Backend scanner raw response:\n{result_text[:1000]}...")
@@ -69,9 +101,9 @@ def scan_backend(repo_content: str, api_key: str, verbose: bool = False) -> List
         return findings
 
     except Exception as e:
-        click.echo(f"      Warning: Backend scan failed: {e}")
         if verbose:
             import traceback
+            click.echo(f"      Warning: Backend scan failed: {e}")
             click.echo(f"      [DEBUG] Traceback:\n{traceback.format_exc()}")
         return []
 
@@ -80,7 +112,7 @@ def parse_findings(response_text: str) -> List[Dict]:
     """Parse the JSON response from the LLM.
 
     Args:
-        response_text: The raw response text from OpenAI.
+        response_text: The raw response text from Claude.
 
     Returns:
         A list of vulnerability findings, or empty list if parsing fails.
@@ -120,6 +152,5 @@ def parse_findings(response_text: str) -> List[Dict]:
         if isinstance(findings, list):
             return findings
         return []
-    except json.JSONDecodeError as e:
-        click.echo(f"      Warning: Could not parse backend scan results: {e}")
+    except json.JSONDecodeError:
         return []

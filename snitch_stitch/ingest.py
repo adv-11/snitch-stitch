@@ -1,9 +1,22 @@
 """Repository ingestion using gitingest."""
 
+import logging
+import sys
 from typing import Dict, Optional, Tuple
 
 import click
 from gitingest import ingest
+
+# Suppress verbose gitingest logs
+try:
+    from loguru import logger
+    logger.remove()  # Remove default handler
+    logger.add(sys.stderr, level="ERROR")  # Only show errors
+except ImportError:
+    pass
+
+# Also suppress standard logging from gitingest
+logging.getLogger("gitingest").setLevel(logging.ERROR)
 
 
 def ingest_repo(repo_path: str) -> Tuple[Dict, str, str]:
