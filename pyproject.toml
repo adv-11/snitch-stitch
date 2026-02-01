@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "snitch-stitch"
-version = "0.1.0"
+version = "0.1.1"
 description = "A security auditor CLI for Git repositories using LLMs"
 readme = "README.md"
 license = { file = "LICENSE" }
