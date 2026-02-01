@@ -1,20 +1,6 @@
 # snitch-stitch
 
-A Python CLI security auditor for Git repositories. Scans both backend source code and running frontend UIs to find real security vulnerabilities, scores them by severity, and generates LLM-powered code fixes.
-
-## Features
-
-- **Static Code Analysis**: Scans backend source code using OpenAI GPT-4o to identify SQL injection, command injection, hardcoded secrets, and more
-- **Dynamic Browser Testing**: Uses rtrvr.ai to probe running frontends for XSS, auth bypass, IDOR, and input validation issues
-- **AI-Powered Fixes**: Generates minimal, targeted code patches using LLM analysis
-- **Interactive Workflow**: Review findings, select vulnerabilities, and approve/reject fixes with colored diffs
-- **Risk Scoring**: Ranks vulnerabilities by exposure, exploitability, and impact (0-10 scale)
-
-## Prerequisites
-
-- Python 3.9 or higher
-- OpenAI API key (required)
-- rtrvr.ai API key (optional, for frontend scanning)
+A security auditor CLI for Git repositories. Scans both backend source code and running frontend UIs to find real security vulnerabilities, scores them by severity, and lets you accept or reject LLM-generated code fixes.
 
 ## Installation
 
@@ -25,131 +11,175 @@ pip install snitch-stitch
 Or install from source:
 
 ```bash
-git clone https://github.com/adv-11/snitch-stitch.git
+git clone https://github.com/snitch-stitch/snitch-stitch.git
 cd snitch-stitch
 pip install -e .
 ```
 
-## Configuration
+## Requirements
 
-Set the required environment variable:
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `OPENAI_API_KEY` | Yes | Used for all LLM calls (code analysis, fix generation) |
+| `RTRVR_API_KEY` | No | Used for frontend browser scanning via rtrvr.ai |
+
+Set these before running:
 
 ```bash
-export OPENAI_API_KEY="your-openai-api-key"
-```
-
-Optionally, for frontend scanning:
-
-```bash
-export RTRVR_API_KEY="your-rtrvr-api-key"
+export OPENAI_API_KEY="sk-..."
+export RTRVR_API_KEY="..."  # Optional, for frontend scanning
 ```
 
 ## Usage
 
-Basic scan (backend only):
-
 ```bash
-snitch-stitch /path/to/your/repo
+snitch-stitch <repo-path> [options]
 ```
 
-Scan with frontend testing:
+### Arguments
+
+- `<repo-path>` - Path to the local repository directory to scan (required)
+
+### Options
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--frontend-url URL` | URL of a running frontend (e.g., `http://localhost:3000`). Enables frontend scanning. | None |
+| `--fix-all` | Skip the selection prompt and attempt to fix everything | False |
+| `--dry-run` | Show diffs but never write anything to disk | False |
+| `--verbose` | Print debug info (raw API responses, parsed JSON) | False |
+
+### Examples
+
+Scan a repository for backend vulnerabilities:
 
 ```bash
-snitch-stitch /path/to/your/repo --frontend-url http://localhost:3000
+snitch-stitch ./my-project
+```
+
+Scan both backend and frontend:
+
+```bash
+snitch-stitch ./my-project --frontend-url http://localhost:3000
 ```
 
 Preview fixes without applying them:
 
 ```bash
-snitch-stitch /path/to/your/repo --dry-run
+snitch-stitch ./my-project --dry-run
 ```
 
-Auto-fix all vulnerabilities:
+Automatically fix all vulnerabilities:
 
 ```bash
-snitch-stitch /path/to/your/repo --fix-all
-```
-
-Verbose output for debugging:
-
-```bash
-snitch-stitch /path/to/your/repo --verbose
+snitch-stitch ./my-project --fix-all
 ```
 
 ## How It Works
 
+snitch-stitch runs through 5 stages:
+
 ### Stage 1: Ingest
-Converts your repository into a text blob using gitingest, making it ready for LLM analysis.
+Converts the repository into a text format suitable for LLM analysis using [gitingest](https://github.com/cyclotruc/gitingest).
 
 ### Stage 2: Backend Scan
-Sends the ingested code to OpenAI GPT-4o with a security analysis prompt. Identifies:
+Sends the code to OpenAI GPT-4o with a security analysis prompt. Identifies vulnerabilities like:
 - SQL injection
 - Command injection
-- Hardcoded secrets
 - Path traversal
-- Deserialization vulnerabilities
-- Missing authentication checks
-- And more
+- Hardcoded secrets
+- Missing authentication
+- Insecure deserialization
+- XSS vulnerabilities
 
 ### Stage 3: Frontend Scan (Optional)
-Uses rtrvr.ai to control a real browser and probe your running frontend for:
-- XSS vulnerabilities
+If `--frontend-url` is provided and `RTRVR_API_KEY` is set, uses rtrvr.ai to control a real browser and probe the running application for:
+- XSS (Cross-Site Scripting)
 - Authentication bypass
-- IDOR (Insecure Direct Object References)
+- IDOR (Insecure Direct Object Reference)
 - Missing input validation
-- Admin access issues
+- Admin panel access
 
 ### Stage 4: Rank
 Scores each vulnerability (0-10) based on:
-- **Exposure**: Is it public-facing or local-only?
-- **Exploitability**: How easy is it to trigger?
-- **Impact**: What's the severity class?
+- **Exposure**: Public-facing (5) vs local-only (1)
+- **Exploitability**: Easy (3) / Moderate (2) / Hard (1)
+- **Impact**: Critical (4) / High (3) / Medium (2) / Low (1)
 
 Severity labels: Critical (9-10), High (7-8), Medium (4-6), Low (1-3)
 
 ### Stage 5: Fix
-- Shows you a ranked table of vulnerabilities
-- You select which ones to fix
-- For each, generates a minimal code patch
-- Shows you a colored diff
-- Applies the fix if you approve
+For each selected vulnerability:
+1. Generates a minimal code fix using OpenAI
+2. Shows a colored diff (red for removals, green for additions)
+3. Prompts you to accept or reject
+4. Writes accepted fixes to disk
 
-## Architecture
+## Example Output
 
 ```
-snitch_stitch/
-├── __init__.py          # Package marker
-├── cli.py               # Click-based CLI orchestrator
-├── ingest.py            # Repository → text conversion
-├── backend_scanner.py   # OpenAI static analysis
-├── frontend_scanner.py  # rtrvr.ai dynamic testing
-├── ranker.py            # Vulnerability scoring
-├── fixer.py             # AI patch generation
-└── diff_display.py      # Interactive diff UI
+$ snitch-stitch ./my-project --frontend-url http://localhost:3000
+
+[1/5] Ingesting repository...
+      ✓ Ingested 47 files (82 KB)
+
+[2/5] Scanning backend code...
+      ✓ Found 4 backend vulnerabilities
+
+[3/5] Scanning frontend...
+      ✓ Found 2 frontend vulnerabilities
+
+[4/5] Ranking findings...
+      ✓ Ranked 6 findings
+
+[5/5] Review and fix
+
+╔════╦══════════╦══════════════════════════════════════════════╦═══════╗
+║  # ║ Severity ║ Title                                        ║ Score ║
+╠════╬══════════╬══════════════════════════════════════════════╬═══════╣
+║  1 ║ Critical ║ SQL injection in /api/login                  ║  10   ║
+║  2 ║ Critical ║ Hardcoded AWS key in settings.py             ║   9   ║
+║  3 ║ High     ║ Command injection in file converter          ║   8   ║
+║  4 ║ High     ║ Missing auth on /api/admin/users             ║   7   ║
+║  5 ║ Medium   ║ XSS in search input                          ║   5   ║
+║  6 ║ Low      ║ No input validation on age field             ║   3   ║
+╚════╩══════════╩══════════════════════════════════════════════╩═══════╝
+
+Select vulnerabilities to fix (comma-separated numbers, or 'all'):
+> 1, 2
+
+--- Generating fix for: SQL injection in /api/login ---
+
+ app/auth.py
+──────────────────────────────────────────────────
+  def login(username, password):
+-     query = f"SELECT * FROM users WHERE username = '{username}'"
+-     cursor.execute(query)
++     query = "SELECT * FROM users WHERE username = %s"
++     cursor.execute(query, (username,))
+      user = cursor.fetchone()
+──────────────────────────────────────────────────
+Apply this fix? [y/n]: y
+✓ Fixed: app/auth.py
 ```
 
-## Development
+## Vulnerability Classes Detected
 
-This project uses PDD (Prompt-Driven Development) for code generation.
-
-1. Clone the repository
-2. Install dependencies: `pip install -e .`
-3. Generate code from prompts: `pdd sync <module_name>`
+| Class | Description |
+|-------|-------------|
+| `sqli` | SQL injection via string concatenation |
+| `command_injection` | Shell command injection via os.system, subprocess |
+| `path_traversal` | Directory traversal allowing file access |
+| `ssrf` | Server-side request forgery |
+| `deserialization` | Insecure deserialization (pickle, yaml) |
+| `xss` | Cross-site scripting |
+| `secrets_exposure` | Hardcoded API keys, passwords, tokens |
+| `authz` | Missing or broken authorization |
+| `idor` | Insecure direct object references |
+| `input_validation` | Missing input validation |
 
 ## License
 
 MIT
-
-## Contributing
-
-Contributions welcome! Please open an issue or PR.
-
-## Security Notice
-
-This tool modifies your code. Always:
-- Review diffs carefully before accepting
-- Use `--dry-run` first
-- Keep backups or use version control
-- Test fixes in a safe environment
-
-The tool is designed to help you find and fix vulnerabilities, but LLM-generated fixes should be validated before deployment.
