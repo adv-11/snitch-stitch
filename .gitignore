@@ -48,8 +48,8 @@ htmlcov/
 .env.local
 
 # PDD generated files
-# prompts/
-# .pdd/
+prompts/
+.pdd/
 
 # Distribution
 *.whl
