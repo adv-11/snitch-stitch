@@ -1,12 +1,10 @@
-"""Backend code security scanner using Claude Sonnet 4.5 with extended thinking."""
+"""Backend code security scanner using litellm (supports OpenAI, Anthropic, etc.)."""
 
 import json
 from typing import Dict, List
 
-import anthropic
 import click
-
-from .fixer import ThinkingDisplay
+import litellm
 
 SECURITY_ANALYSIS_PROMPT = """You are a security auditor. You are given the full source code of a software repository.
 
@@ -34,15 +32,16 @@ Rules:
 
 
 def scan_backend(
-    repo_content: str, api_key: str, verbose: bool = False, show_thinking: bool = True
+    repo_content: str, api_key: str, model: str = "gpt-4o", verbose: bool = False
 ) -> List[Dict]:
-    """Scan repository code for security vulnerabilities using Claude Sonnet 4.5.
+    """Scan repository code for security vulnerabilities using litellm.
 
     Args:
         repo_content: The full text content of the repository from gitingest.
-        api_key: Anthropic API key.
+        api_key: API key for the LLM provider.
+        model: litellm model string (e.g. "gpt-4o", "claude-sonnet-4-5-20250929",
+               "gemini/gemini-1.5-pro"). Defaults to "gpt-4o".
         verbose: If True, print debug information.
-        show_thinking: If True, display Claude's thinking process in the CLI.
 
     Returns:
         A list of vulnerability findings, each as a dict with keys:
@@ -51,50 +50,33 @@ def scan_backend(
     if not repo_content or len(repo_content) < 10:
         return []
 
-    client = anthropic.Anthropic(api_key=api_key)
+    # Set the API key in litellm based on model prefix
+    _set_api_key(model, api_key)
 
     try:
-        thinking_text = ""
         result_text = ""
-        display = ThinkingDisplay("Scanning...", "33") if show_thinking else None  # Yellow color
 
-        # Use streaming to show thinking in real-time
-        with client.messages.stream(
-            model="claude-sonnet-4-5-20250929",
-            max_tokens=16000,
-            thinking={
-                "type": "enabled",
-                "budget_tokens": 5000,
-            },
+        click.echo("      Analyzing code...", nl=False)
+
+        response = litellm.completion(
+            model=model,
             messages=[
-                {"role": "user", "content": f"{SECURITY_ANALYSIS_PROMPT}\n\n{repo_content}"},
+                {
+                    "role": "user",
+                    "content": f"{SECURITY_ANALYSIS_PROMPT}\n\n{repo_content}",
+                }
             ],
-        ) as stream:
-            for event in stream:
-                if hasattr(event, "type"):
-                    if event.type == "content_block_start":
-                        if hasattr(event, "content_block") and event.content_block.type == "thinking":
-                            if display:
-                                display.start()
-                    elif event.type == "content_block_delta":
-                        if hasattr(event, "delta"):
-                            if event.delta.type == "thinking_delta":
-                                thinking_text += event.delta.thinking
-                                if display:
-                                    display.update(thinking_text)
-                            elif event.delta.type == "text_delta":
-                                result_text += event.delta.text
+            max_tokens=8000,
+        )
 
-        if display:
-            display.finish()
+        result_text = response.choices[0].message.content or ""
+        click.echo(" done.")
 
         if verbose:
             click.echo(f"\n      [DEBUG] Backend scanner raw response:\n{result_text[:1000]}...")
 
-        # Parse the JSON response
         findings = parse_findings(result_text)
 
-        # Add source marker to each finding
         for finding in findings:
             finding["_source"] = "backend"
 
@@ -103,46 +85,49 @@ def scan_backend(
     except Exception as e:
         if verbose:
             import traceback
-            click.echo(f"      Warning: Backend scan failed: {e}")
+            click.echo(f"\n      Warning: Backend scan failed: {e}")
             click.echo(f"      [DEBUG] Traceback:\n{traceback.format_exc()}")
+        else:
+            click.echo(f"\n      Warning: Backend scan failed: {e}")
         return []
+
+
+def _set_api_key(model: str, api_key: str) -> None:
+    """Set the appropriate API key env var for the given model."""
+    import os
+    model_lower = model.lower()
+    if model_lower.startswith("claude") or "anthropic" in model_lower:
+        os.environ.setdefault("ANTHROPIC_API_KEY", api_key)
+    elif model_lower.startswith("gemini") or "google" in model_lower:
+        os.environ.setdefault("GEMINI_API_KEY", api_key)
+    elif model_lower.startswith("azure"):
+        os.environ.setdefault("AZURE_API_KEY", api_key)
+    else:
+        # Default to OpenAI
+        os.environ.setdefault("OPENAI_API_KEY", api_key)
 
 
 def parse_findings(response_text: str) -> List[Dict]:
-    """Parse the JSON response from the LLM.
-
-    Args:
-        response_text: The raw response text from Claude.
-
-    Returns:
-        A list of vulnerability findings, or empty list if parsing fails.
-    """
+    """Parse the JSON response from the LLM."""
     if not response_text:
         return []
 
-    # Clean up the response text
     text = response_text.strip()
 
-    # Remove markdown code fences if present
     if text.startswith("```"):
-        # Find the end of the opening fence
         first_newline = text.find("\n")
         if first_newline != -1:
             text = text[first_newline + 1:]
-        # Remove closing fence
         if text.endswith("```"):
             text = text[:-3]
         text = text.strip()
 
-    # Try to find JSON array in the text
     if not text.startswith("["):
-        # Try to find the start of a JSON array
         start_idx = text.find("[")
         if start_idx != -1:
             text = text[start_idx:]
 
     if not text.endswith("]"):
-        # Try to find the end of a JSON array
         end_idx = text.rfind("]")
         if end_idx != -1:
             text = text[:end_idx + 1]

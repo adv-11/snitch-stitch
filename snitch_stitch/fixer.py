@@ -1,85 +1,13 @@
-"""Fix generation module using Claude Sonnet 4.5 with extended thinking."""
+"""Fix generation module using litellm (supports OpenAI, Anthropic, etc.)."""
 
 import json
 import sys
 from typing import Dict, List, Optional
 
-import anthropic
 import click
+import litellm
 
 from .ingest import extract_file_content
-
-# Constants for display
-THINKING_LINE_WIDTH = 60
-THINKING_NUM_LINES = 3
-
-
-class ThinkingDisplay:
-    """Handles real-time display of thinking with 3-line scrolling window."""
-
-    def __init__(self, header: str, color_code: str = "36"):
-        self.header = header
-        self.color = color_code
-        self.lines: List[str] = []
-        self.displayed_lines = 0
-        self.started = False
-
-    def _truncate_line(self, line: str) -> str:
-        """Truncate a line to fit the display width, showing the end (most recent content)."""
-        if len(line) > THINKING_LINE_WIDTH:
-            # Show the end of the line so user sees the most recent content being typed
-            return "..." + line[-(THINKING_LINE_WIDTH - 3):]
-        return line.ljust(THINKING_LINE_WIDTH)
-
-    def _clear_lines(self, count: int) -> None:
-        """Move cursor up and clear lines."""
-        for _ in range(count):
-            sys.stdout.write("\033[A")  # Move up
-            sys.stdout.write("\033[K")  # Clear line
-
-    def start(self) -> None:
-        """Print the header and initial empty lines."""
-        if self.started:
-            return
-        self.started = True
-        click.echo(f"\n      \033[{self.color}m┌─ {self.header} {'─' * (THINKING_LINE_WIDTH - len(self.header) - 1)}┐\033[0m")
-        # Print empty placeholder lines
-        for _ in range(THINKING_NUM_LINES):
-            click.echo(f"      \033[{self.color}m│\033[0m {' ' * THINKING_LINE_WIDTH} \033[{self.color}m│\033[0m")
-        self.displayed_lines = THINKING_NUM_LINES
-
-    def update(self, text: str) -> None:
-        """Update the display with new thinking text."""
-        if not self.started:
-            self.start()
-
-        # Split text into lines and keep last N
-        all_lines = text.split("\n")
-        # Filter out empty lines at the end
-        while all_lines and not all_lines[-1].strip():
-            all_lines.pop()
-
-        # Get the last 3 non-empty lines
-        self.lines = all_lines[-THINKING_NUM_LINES:] if all_lines else []
-
-        # Move cursor up to overwrite previous lines
-        self._clear_lines(self.displayed_lines)
-
-        # Print the current lines (always print exactly 3 lines)
-        for i in range(THINKING_NUM_LINES):
-            if i < len(self.lines):
-                line = self._truncate_line(self.lines[i])
-            else:
-                line = " " * THINKING_LINE_WIDTH
-            click.echo(f"      \033[{self.color}m│\033[0m {line} \033[{self.color}m│\033[0m")
-
-        sys.stdout.flush()
-
-    def finish(self) -> None:
-        """Print the footer."""
-        if not self.started:
-            return
-        click.echo(f"      \033[{self.color}m└{'─' * (THINKING_LINE_WIDTH + 2)}┘\033[0m")
 
 EVALUATE_AND_FIX_PROMPT = """You are a code security fixer. A fix was just applied to address a specific vulnerability. Your job is to evaluate if THIS SPECIFIC vulnerability is now FULLY fixed, and if not, provide the next fix.
 
@@ -123,25 +51,38 @@ Rules for the fix:
 Return ONLY the JSON object. No markdown. No explanation."""
 
 
+def _set_api_key(model: str, api_key: str) -> None:
+    """Set the appropriate API key env var for the given model."""
+    import os
+    model_lower = model.lower()
+    if model_lower.startswith("claude") or "anthropic" in model_lower:
+        os.environ.setdefault("ANTHROPIC_API_KEY", api_key)
+    elif model_lower.startswith("gemini") or "google" in model_lower:
+        os.environ.setdefault("GEMINI_API_KEY", api_key)
+    elif model_lower.startswith("azure"):
+        os.environ.setdefault("AZURE_API_KEY", api_key)
+    else:
+        os.environ.setdefault("OPENAI_API_KEY", api_key)
+
+
 def generate_fix(
     finding: Dict,
     repo_content: str,
     api_key: str,
+    model: str = "gpt-4o",
     verbose: bool = False,
     file_content_override: Optional[str] = None,
-    show_thinking: bool = True,
 ) -> Optional[Dict]:
-    """Generate a fix for a vulnerability using Claude Sonnet 4.5 with extended thinking.
+    """Generate a fix for a vulnerability using litellm.
 
     Args:
         finding: The vulnerability finding dict with file, description, etc.
         repo_content: The full repository content from gitingest.
-        api_key: Anthropic API key.
+        api_key: API key for the LLM provider.
+        model: litellm model string. Defaults to "gpt-4o".
         verbose: If True, print debug information.
         file_content_override: If provided, use this as the file content instead of
-            extracting from repo_content. Useful for generating additional fixes
-            after the file has already been modified.
-        show_thinking: If True, display Claude's thinking process in the CLI.
+            extracting from repo_content.
 
     Returns:
         A dict with "original_lines" and "fixed_lines" keys, or None if
@@ -149,7 +90,6 @@ def generate_fix(
     """
     file_path = finding.get("file", "")
 
-    # Frontend findings may not have a file path
     if not file_path:
         if finding.get("_source") == "frontend":
             return {
@@ -159,7 +99,6 @@ def generate_fix(
             }
         return None
 
-    # Use override content if provided, otherwise extract from repo
     if file_content_override is not None:
         file_content = file_content_override
     else:
@@ -170,7 +109,6 @@ def generate_fix(
             click.echo(f"      [DEBUG] Could not extract content for file: {file_path}")
         return None
 
-    # Build the prompt
     vulnerability_info = f"""Vulnerability details:
 - ID: {finding.get('id', 'unknown')}
 - Title: {finding.get('title', 'Unknown vulnerability')}
@@ -186,75 +124,45 @@ File content:
 {file_content}
 ```"""
 
-    client = anthropic.Anthropic(api_key=api_key)
+    _set_api_key(model, api_key)
 
     try:
-        thinking_text = ""
-        result_text = ""
-        display = ThinkingDisplay("Thinking...", "36") if show_thinking else None
+        click.echo("      Generating fix...", nl=False)
 
-        # Use streaming to show thinking in real-time
-        with client.messages.stream(
-            model="claude-sonnet-4-5-20250929",
-            max_tokens=16000,
-            thinking={
-                "type": "enabled",
-                "budget_tokens": 5000,
-            },
+        response = litellm.completion(
+            model=model,
             messages=[
-                {"role": "user", "content": f"{FIX_GENERATION_PROMPT}\n\n{vulnerability_info}"},
+                {
+                    "role": "user",
+                    "content": f"{FIX_GENERATION_PROMPT}\n\n{vulnerability_info}",
+                }
             ],
-        ) as stream:
-            for event in stream:
-                # Handle thinking content
-                if hasattr(event, "type"):
-                    if event.type == "content_block_start":
-                        if hasattr(event, "content_block") and event.content_block.type == "thinking":
-                            if display:
-                                display.start()
-                    elif event.type == "content_block_delta":
-                        if hasattr(event, "delta"):
-                            if event.delta.type == "thinking_delta":
-                                thinking_text += event.delta.thinking
-                                if display:
-                                    display.update(thinking_text)
-                            elif event.delta.type == "text_delta":
-                                result_text += event.delta.text
+            max_tokens=4000,
+        )
 
-        if display:
-            display.finish()
+        result_text = response.choices[0].message.content or ""
+        click.echo(" done.")
 
-        if verbose and result_text:
+        if verbose:
             click.echo(f"\n      [DEBUG] Fix generation raw response:\n{result_text}")
 
-        # Parse the JSON response
-        fix = parse_fix_response(result_text)
-
-        return fix
+        return parse_fix_response(result_text)
 
     except Exception as e:
         if verbose:
             import traceback
-            click.echo(f"      Warning: Fix generation failed: {e}")
+            click.echo(f"\n      Warning: Fix generation failed: {e}")
             click.echo(f"      [DEBUG] Traceback:\n{traceback.format_exc()}")
         return None
 
 
 def parse_fix_response(response_text: str) -> Optional[Dict]:
-    """Parse the JSON response from fix generation.
-
-    Args:
-        response_text: The raw response text from Claude.
-
-    Returns:
-        A dict with original_lines and fixed_lines, or None if parsing fails.
-    """
+    """Parse the JSON response from fix generation."""
     if not response_text:
         return None
 
     text = response_text.strip()
 
-    # Remove markdown code fences if present
     if text.startswith("```"):
         first_newline = text.find("\n")
         if first_newline != -1:
@@ -263,7 +171,6 @@ def parse_fix_response(response_text: str) -> Optional[Dict]:
             text = text[:-3]
         text = text.strip()
 
-    # Find JSON object
     if not text.startswith("{"):
         start_idx = text.find("{")
         if start_idx != -1:
@@ -287,25 +194,21 @@ def evaluate_and_fix_remaining(
     finding: Dict,
     current_file_content: str,
     api_key: str,
+    model: str = "gpt-4o",
     verbose: bool = False,
-    show_thinking: bool = True,
 ) -> Optional[Dict]:
     """Evaluate if more changes are needed and return the next fix if so.
 
-    This combines the "check if more needed" and "generate fix" steps into a single
-    model call for efficiency.
-
     Args:
-        finding: The vulnerability finding dict with file, description, etc.
+        finding: The vulnerability finding dict.
         current_file_content: The current content of the file after applying fixes.
-        api_key: Anthropic API key.
+        api_key: API key for the LLM provider.
+        model: litellm model string. Defaults to "gpt-4o".
         verbose: If True, print debug information.
-        show_thinking: If True, display Claude's thinking process in the CLI.
 
     Returns:
         A dict with "original_lines" and "fixed_lines" if more changes are needed,
-        or None if the vulnerability is fully fixed. May include a "note" key with
-        the reason when no more changes are needed.
+        or None if the vulnerability is fully fixed.
     """
     file_path = finding.get("file", "")
 
@@ -326,50 +229,30 @@ Current file content after the fix:
 
 Does this file still need MORE changes to fully fix THIS SPECIFIC vulnerability? If yes, provide the next fix. If no, indicate the fix is complete. Remember: only consider this exact vulnerability, not other issues."""
 
-    client = anthropic.Anthropic(api_key=api_key)
+    _set_api_key(model, api_key)
 
     try:
-        thinking_text = ""
-        result_text = ""
-        display = ThinkingDisplay("Evaluating...", "35") if show_thinking else None
+        click.echo("      Evaluating...", nl=False)
 
-        # Use streaming to show thinking in real-time
-        with client.messages.stream(
-            model="claude-sonnet-4-5-20250929",
-            max_tokens=16000,
-            thinking={
-                "type": "enabled",
-                "budget_tokens": 5000,
-            },
+        response = litellm.completion(
+            model=model,
             messages=[
-                {"role": "user", "content": f"{EVALUATE_AND_FIX_PROMPT}\n\n{vulnerability_info}"},
+                {
+                    "role": "user",
+                    "content": f"{EVALUATE_AND_FIX_PROMPT}\n\n{vulnerability_info}",
+                }
             ],
-        ) as stream:
-            for event in stream:
-                if hasattr(event, "type"):
-                    if event.type == "content_block_start":
-                        if hasattr(event, "content_block") and event.content_block.type == "thinking":
-                            if display:
-                                display.start()
-                    elif event.type == "content_block_delta":
-                        if hasattr(event, "delta"):
-                            if event.delta.type == "thinking_delta":
-                                thinking_text += event.delta.thinking
-                                if display:
-                                    display.update(thinking_text)
-                            elif event.delta.type == "text_delta":
-                                result_text += event.delta.text
+            max_tokens=4000,
+        )
 
-        if display:
-            display.finish()
+        result_text = response.choices[0].message.content or ""
+        click.echo(" done.")
 
-        if verbose and result_text:
+        if verbose:
             click.echo(f"\n      [DEBUG] Evaluate and fix response:\n{result_text}")
 
-        # Parse the response
         text = result_text.strip()
 
-        # Remove markdown code fences if present
         if text.startswith("```"):
             first_newline = text.find("\n")
             if first_newline != -1:
@@ -378,7 +261,6 @@ Does this file still need MORE changes to fully fix THIS SPECIFIC vulnerability?
                 text = text[:-3]
             text = text.strip()
 
-        # Find JSON object
         if not text.startswith("{"):
             start_idx = text.find("{")
             if start_idx != -1:
@@ -397,17 +279,14 @@ Does this file still need MORE changes to fully fix THIS SPECIFIC vulnerability?
             click.echo(f"      [DEBUG] More changes needed: {needs_more} - {reason}")
 
         if not needs_more:
-            # Return note explaining why no more changes are needed
             if reason:
                 click.echo(f"Note: {reason}")
             return None
 
-        # Return the fix if more changes are needed
         original_lines = result.get("original_lines", "")
         fixed_lines = result.get("fixed_lines", "")
 
         if not original_lines:
-            # Model said more changes needed but didn't provide a fix
             if verbose:
                 click.echo("      [DEBUG] Model indicated more changes needed but didn't provide fix")
             return None
@@ -420,5 +299,4 @@ Does this file still need MORE changes to fully fix THIS SPECIFIC vulnerability?
     except Exception as e:
         if verbose:
             click.echo(f"      [DEBUG] Evaluate and fix failed: {e}")
-        # Default to no more changes needed if we can't determine
-        return None
+        return None 
